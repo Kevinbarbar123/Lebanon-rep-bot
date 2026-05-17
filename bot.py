@@ -712,6 +712,7 @@ def send_dashboard_link() -> None:
 def format_listing_message(listing: Listing) -> str:
     owner_name = listing.seller or "Unknown owner"
     phone = listing.contact or "Phone hidden"
+    wa_link = whatsapp_url(listing.contact, listing.title, listing.url)
     parts = [
         "🏠 <b>Owner apartment in Metn</b>",
         f"<b>{html.escape(listing.title)}</b>",
@@ -722,8 +723,20 @@ def format_listing_message(listing: Listing) -> str:
         parts.append(f"Price: {html.escape(listing.price)}")
     if listing.location:
         parts.append(f"Location: {html.escape(listing.location)}")
+    if listing.area_name:
+        parts.append(f"Area: {html.escape(listing.area_name)}")
+    if listing.area_sqm:
+        parts.append(f"Size: {fmt_number(listing.area_sqm)} sqm")
+    if listing.price_per_sqm:
+        parts.append(f"Average: {fmt_money(listing.price_per_sqm)} per sqm")
     parts.append(f"Source: {html.escape(listing.source)}")
-    parts.append(html.escape(listing.url))
+    if wa_link:
+        parts.append(f"WhatsApp: {html.escape(wa_link)}")
+    else:
+        parts.append("WhatsApp: phone not available")
+    parts.append(f"Message/listing: {html.escape(listing.url)}")
+    if dashboard_link():
+        parts.append(f"Dashboard: {html.escape(dashboard_link())}")
     return "\n".join(parts)
 
 
