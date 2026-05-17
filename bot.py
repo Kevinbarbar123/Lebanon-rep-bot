@@ -824,9 +824,25 @@ def build_summary(listings: list[dict]) -> dict:
         name = row.get("seller") or "Unknown owner"
         phone = row.get("contact") or "Phone hidden"
         key = f"{name} | {phone} | {row.get('source') or ''}"
-        clients.setdefault(key, {"name": name, "phone": phone, "source": row.get("source") or "", "count": 0, "latest_seen_at": "", "areas": set()})
+        clients.setdefault(
+            key,
+            {
+                "name": name,
+                "phone": phone,
+                "source": row.get("source") or "",
+                "count": 0,
+                "latest_seen_at": "",
+                "latest_url": "",
+                "latest_title": "",
+                "areas": set(),
+            },
+        )
         clients[key]["count"] += 1
-        clients[key]["latest_seen_at"] = max(clients[key]["latest_seen_at"], row.get("latest_seen_at") or "")
+        latest_seen = row.get("latest_seen_at") or ""
+        if latest_seen >= clients[key]["latest_seen_at"]:
+            clients[key]["latest_seen_at"] = latest_seen
+            clients[key]["latest_url"] = row.get("url") or ""
+            clients[key]["latest_title"] = row.get("title") or ""
         clients[key]["areas"].add(area)
 
     area_rows = []
@@ -852,6 +868,8 @@ def build_summary(listings: list[dict]) -> dict:
                 "source": data["source"],
                 "count": data["count"],
                 "latest_seen_at": data["latest_seen_at"],
+                "latest_url": data["latest_url"],
+                "latest_title": data["latest_title"],
                 "areas": ", ".join(sorted(data["areas"])),
             }
         )
@@ -915,13 +933,14 @@ def render_client_rows(summary: dict) -> str:
             f"<td>{html.escape(client['name'])}</td>"
             f"<td>{html.escape(client['phone'])}</td>"
             f"<td>{whatsapp_button(client['phone'], 'apartment listing', '')}</td>"
+            f"<td>{listing_message_button(client['source'], client.get('latest_url'))}</td>"
             f"<td>{html.escape(client['source'])}</td>"
             f"<td>{client['count']}</td>"
             f"<td>{html.escape(client['areas'])}</td>"
             f"<td>{html.escape(client['latest_seen_at'][:19])}</td>"
             "</tr>"
         )
-    return "\n".join(rows) or "<tr><td colspan=\"7\">No owner contact history yet.</td></tr>"
+    return "\n".join(rows) or "<tr><td colspan=\"8\">No owner contact history yet.</td></tr>"
 
 
 def render_dashboard(title: str, listings: list[dict], summary: dict, root: str = "") -> str:
@@ -990,7 +1009,7 @@ def render_dashboard(title: str, listings: list[dict], summary: dict, root: str 
     <h2>Owner Contact History</h2>
     <div class="table-wrap">
       <table>
-        <thead><tr><th>Name</th><th>Phone</th><th>WhatsApp</th><th>Source</th><th>Listings</th><th>Areas</th><th>Latest seen</th></tr></thead>
+        <thead><tr><th>Name</th><th>Phone</th><th>WhatsApp</th><th>OLX message</th><th>Source</th><th>Listings</th><th>Areas</th><th>Latest seen</th></tr></thead>
         <tbody>{render_client_rows(summary)}</tbody>
       </table>
     </div>
