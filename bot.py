@@ -10,7 +10,7 @@ from datetime import datetime, timezone
 from functools import partial
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from threading import Thread
+from threading import Lock, Thread
 from typing import Iterable
 from urllib.parse import urljoin, urlparse
 
@@ -26,6 +26,8 @@ SEND_STARTUP_MESSAGE = os.getenv("SEND_STARTUP_MESSAGE", "true").lower() in {"1"
 DATABASE_PATH = os.getenv("DATABASE_PATH", "seen_listings.sqlite3")
 DASHBOARD_DIR = os.getenv("DASHBOARD_DIR", "offline_site")
 LBP_PER_USD = float(os.getenv("LBP_PER_USD", "89500"))
+DASHBOARD_URL = os.getenv("DASHBOARD_URL", "https://incredible-creativity-production.up.railway.app").strip()
+CHECK_LOCK = Lock()
 
 REQUEST_HEADERS = {
     "User-Agent": (
@@ -614,7 +616,7 @@ def extract_seller(text: str) -> str:
     return ""
 
 
-def send_telegram(text: str) -> None:
+def send_telegram(text: str, reply_markup: dict | None = None) -> None:
     if not BOT_TOKEN or not CHAT_ID:
         log("Telegram variables are missing; cannot send message.")
         return
@@ -626,8 +628,76 @@ def send_telegram(text: str) -> None:
         "parse_mode": "HTML",
         "disable_web_page_preview": False,
     }
+    if reply_markup:
+        payload["reply_markup"] = reply_markup
     response = requests.post(url, json=payload, timeout=25)
     response.raise_for_status()
+
+
+def telegram_request(method: str, payload: dict | None = None, timeout: int = 30) -> dict:
+    if not BOT_TOKEN:
+        return {"ok": False, "description": "missing bot token"}
+    url = f"https://api.telegram.org/bot{BOT_TOKEN}/{method}"
+    response = requests.post(url, json=payload or {}, timeout=timeout)
+    response.raise_for_status()
+    return response.json()
+
+
+def command_keyboard() -> dict:
+    return {
+        "keyboard": [
+            [{"text": "Search now"}, {"text": "Dashboard"}],
+        ],
+        "resize_keyboard": True,
+        "one_time_keyboard": False,
+    }
+
+
+def dashboard_link() -> str:
+    if not DASHBOARD_URL:
+        return ""
+    if DASHBOARD_URL.startswith(("http://", "https://")):
+        return DASHBOARD_URL
+    return f"https://{DASHBOARD_URL}"
+
+
+def setup_telegram_commands() -> None:
+    if not BOT_TOKEN:
+        return
+    try:
+        telegram_request(
+            "setMyCommands",
+            {
+                "commands": [
+                    {"command": "start", "description": "Show bot menu"},
+                    {"command": "search", "description": "Search for apartments now"},
+                    {"command": "dashboard", "description": "Open dashboard"},
+                ]
+            },
+            timeout=15,
+        )
+        log("Telegram commands registered: /start, /search, /dashboard")
+    except Exception as exc:
+        log(f"Could not register Telegram commands: {exc}")
+
+
+def send_start_menu() -> None:
+    link = dashboard_link()
+    message = (
+        "Hi. I am online and watching owner-style Metn apartment listings.\n\n"
+        "Use <b>Search now</b> or /search whenever you want me to check immediately.\n"
+    )
+    if link:
+        message += f"\nDashboard: {html.escape(link)}"
+    send_telegram(message, reply_markup=command_keyboard())
+
+
+def send_dashboard_link() -> None:
+    link = dashboard_link()
+    if link:
+        send_telegram(f"Dashboard: {html.escape(link)}", reply_markup=command_keyboard())
+    else:
+        send_telegram("Dashboard URL is not configured yet.", reply_markup=command_keyboard())
 
 
 def format_listing_message(listing: Listing) -> str:
@@ -963,9 +1033,88 @@ def run_check(first_run: bool = False) -> None:
     )
 
 
+def run_check_guarded(first_run: bool = False, triggered_by: str = "schedule") -> bool:
+    if not CHECK_LOCK.acquire(blocking=False):
+        log(f"Skipping {triggered_by} check because another check is already running.")
+        return False
+    try:
+        log(f"Starting {triggered_by} check.")
+        run_check(first_run=first_run)
+        return True
+    finally:
+        CHECK_LOCK.release()
+
+
+def run_manual_check() -> None:
+    try:
+        send_telegram("Searching now. I will update the dashboard and alert you if I find new likely owner listings.", reply_markup=command_keyboard())
+    except Exception as exc:
+        log(f"Could not send manual-search start message: {exc}")
+
+    started = run_check_guarded(first_run=False, triggered_by="manual Telegram")
+    if not started:
+        try:
+            send_telegram("A search is already running. Try again in a few minutes.", reply_markup=command_keyboard())
+        except Exception as exc:
+            log(f"Could not send busy message: {exc}")
+        return
+
+    try:
+        send_telegram("Manual search finished. Dashboard updated.", reply_markup=command_keyboard())
+    except Exception as exc:
+        log(f"Could not send manual-search done message: {exc}")
+
+
+def handle_telegram_message(message: dict) -> None:
+    chat = message.get("chat") or {}
+    chat_id = str(chat.get("id") or "")
+    if CHAT_ID and chat_id != CHAT_ID:
+        log(f"Ignoring Telegram message from unauthorized chat {chat_id}.")
+        return
+
+    text = clean_text(message.get("text") or "").lower()
+    if text.startswith("/start"):
+        send_start_menu()
+    elif text.startswith("/dashboard") or text == "dashboard":
+        send_dashboard_link()
+    elif text.startswith("/search") or text in {"search now", "search", "check now", "run now"}:
+        Thread(target=run_manual_check, daemon=True).start()
+    else:
+        send_telegram("Use /start for the menu, /search to search now, or /dashboard for the dashboard link.", reply_markup=command_keyboard())
+
+
+def poll_telegram_commands() -> None:
+    if not BOT_TOKEN:
+        log("Telegram command polling disabled because token is missing.")
+        return
+
+    setup_telegram_commands()
+    offset = None
+    log("Telegram command listener started.")
+    while True:
+        try:
+            payload = {"timeout": 25}
+            if offset is not None:
+                payload["offset"] = offset
+            result = telegram_request("getUpdates", payload, timeout=35)
+            for update in result.get("result", []):
+                offset = int(update["update_id"]) + 1
+                if "message" in update:
+                    handle_telegram_message(update["message"])
+        except Exception as exc:
+            log(f"Telegram polling error: {exc}")
+            time.sleep(10)
+
+
+def start_telegram_listener() -> None:
+    thread = Thread(target=poll_telegram_commands, daemon=True)
+    thread.start()
+
+
 def main() -> int:
     init_db()
     start_dashboard_server()
+    start_telegram_listener()
     hours = round(CHECK_INTERVAL_SECONDS / 3600, 2)
     log("Metn apartment Telegram bot starting.")
     log(f"Check interval: {CHECK_INTERVAL_SECONDS} seconds ({hours} hours)")
@@ -979,11 +1128,8 @@ def main() -> int:
 
     first_run = True
     while True:
-        try:
-            run_check(first_run=first_run)
+        if run_check_guarded(first_run=first_run, triggered_by="scheduled"):
             first_run = False
-        except Exception as exc:
-            log(f"Unexpected check error: {exc}")
         time.sleep(max(CHECK_INTERVAL_SECONDS, 60))
 
 
