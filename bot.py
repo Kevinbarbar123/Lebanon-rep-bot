@@ -779,6 +779,20 @@ def whatsapp_button(phone: str | None, title: str = "", listing_url: str = "") -
     return f'<a class="wa-button" href="{html.escape(url)}" target="_blank" rel="noopener">WhatsApp</a>'
 
 
+def listing_message_button(source: str | None, listing_url: str | None) -> str:
+    if not listing_url:
+        return '<span class="muted">No link</span>'
+    label = "Message"
+    source_text = (source or "").lower()
+    if "olx" in source_text or "dubizzle" in source_text:
+        label = "OLX message"
+    elif "opensooq" in source_text:
+        label = "OpenSooq message"
+    elif "mourjan" in source_text:
+        label = "Mourjan message"
+    return f'<a class="msg-button" href="{html.escape(listing_url)}" target="_blank" rel="noopener">{label}</a>'
+
+
 def load_history() -> list[dict]:
     with sqlite3.connect(DATABASE_PATH) as conn:
         conn.row_factory = sqlite3.Row
@@ -865,6 +879,7 @@ def render_listing_rows(listings: list[dict]) -> str:
             f"<td>{html.escape(owner_name)}</td>"
             f"<td>{html.escape(phone)}</td>"
             f"<td>{whatsapp_button(phone, row.get('title') or '', row.get('url') or '')}</td>"
+            f"<td>{listing_message_button(row.get('source'), row.get('url'))}</td>"
             f"<td><a href=\"{html.escape(row.get('url') or '')}\">{html.escape(row.get('title') or 'Open listing')}</a></td>"
             f"<td>{html.escape(row.get('area_name') or '')}</td>"
             f"<td>{html.escape(row.get('source') or '')}</td>"
@@ -934,6 +949,8 @@ def render_dashboard(title: str, listings: list[dict], summary: dict, root: str 
     .button {{ display:inline-flex; align-items:center; min-height:36px; padding:0 12px; border-radius:8px; background:#fff; border:1px solid var(--line); text-decoration:none; }}
     .wa-button {{ display:inline-flex; align-items:center; min-height:32px; padding:0 10px; border-radius:8px; background:#128c7e; color:#fff; text-decoration:none; white-space:nowrap; }}
     .wa-button:visited {{ color:#fff; }}
+    .msg-button {{ display:inline-flex; align-items:center; min-height:32px; padding:0 10px; border-radius:8px; background:#172026; color:#fff; text-decoration:none; white-space:nowrap; }}
+    .msg-button:visited {{ color:#fff; }}
     .table-wrap {{ overflow:auto; background:#fff; border:1px solid var(--line); border-radius:8px; }}
     table {{ width:100%; border-collapse:collapse; min-width:860px; }}
     th, td {{ padding:10px 12px; border-bottom:1px solid var(--line); text-align:left; vertical-align:top; font-size:14px; }}
@@ -981,7 +998,7 @@ def render_dashboard(title: str, listings: list[dict], summary: dict, root: str 
     <h2>Owner Listing History</h2>
     <div class="table-wrap">
       <table>
-        <thead><tr><th>Name</th><th>Phone</th><th>WhatsApp</th><th>Listing link</th><th>Area</th><th>Source</th><th>Price</th><th>sqm</th><th>USD/sqm</th><th>Latest seen</th></tr></thead>
+        <thead><tr><th>Name</th><th>Phone</th><th>WhatsApp</th><th>OLX message</th><th>Listing link</th><th>Area</th><th>Source</th><th>Price</th><th>sqm</th><th>USD/sqm</th><th>Latest seen</th></tr></thead>
         <tbody>{render_listing_rows(listings)}</tbody>
       </table>
     </div>
