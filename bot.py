@@ -245,6 +245,7 @@ def init_db() -> None:
             )
             """
         )
+        conn.execute("DELETE FROM listing_history WHERE is_probable_owner != 1")
         conn.commit()
 
 
@@ -276,6 +277,8 @@ def save_listing_history(listings: Iterable[Listing]) -> None:
     now = datetime.now(timezone.utc).isoformat()
     for listing in listings:
         enriched = enrich_listing(listing)
+        if not enriched.is_probable_owner:
+            continue
         rows.append(
             (
                 enriched.listing_id,
@@ -331,6 +334,12 @@ def save_listing_history(listings: Iterable[Listing]) -> None:
             """,
             rows,
         )
+        conn.commit()
+
+
+def purge_non_owner_history() -> None:
+    with sqlite3.connect(DATABASE_PATH) as conn:
+        conn.execute("DELETE FROM listing_history WHERE is_probable_owner != 1")
         conn.commit()
 
 
@@ -701,18 +710,19 @@ def send_dashboard_link() -> None:
 
 
 def format_listing_message(listing: Listing) -> str:
+    owner_name = listing.seller or "Unknown owner"
+    phone = listing.contact or "Phone hidden"
     parts = [
-        "🏠 <b>Possible owner apartment in Metn</b>",
-        f"Source: {html.escape(listing.source)}",
+        "🏠 <b>Owner apartment in Metn</b>",
         f"<b>{html.escape(listing.title)}</b>",
+        f"Owner: {html.escape(owner_name)}",
+        f"Phone: {html.escape(phone)}",
     ]
     if listing.price:
         parts.append(f"Price: {html.escape(listing.price)}")
     if listing.location:
         parts.append(f"Location: {html.escape(listing.location)}")
-    if listing.seller:
-        parts.append(f"Seller: {html.escape(listing.seller)}")
-    parts.append(f"Why: {html.escape(listing.reason)}")
+    parts.append(f"Source: {html.escape(listing.source)}")
     parts.append(html.escape(listing.url))
     return "\n".join(parts)
 
@@ -737,6 +747,7 @@ def load_history() -> list[dict]:
         rows = conn.execute(
             """
             SELECT * FROM listing_history
+            WHERE is_probable_owner = 1
             ORDER BY latest_seen_at DESC, first_seen_at DESC
             """
         ).fetchall()
@@ -758,9 +769,10 @@ def build_summary(listings: list[dict]) -> dict:
         if row.get("price_per_sqm"):
             areas[area]["price_per_sqm"].append(float(row["price_per_sqm"]))
 
-        contact = row.get("seller") or row.get("contact") or "Unknown contact"
-        key = f"{contact} | {row.get('source') or ''}"
-        clients.setdefault(key, {"contact": contact, "source": row.get("source") or "", "count": 0, "latest_seen_at": "", "areas": set()})
+        name = row.get("seller") or "Unknown owner"
+        phone = row.get("contact") or "Phone hidden"
+        key = f"{name} | {phone} | {row.get('source') or ''}"
+        clients.setdefault(key, {"name": name, "phone": phone, "source": row.get("source") or "", "count": 0, "latest_seen_at": "", "areas": set()})
         clients[key]["count"] += 1
         clients[key]["latest_seen_at"] = max(clients[key]["latest_seen_at"], row.get("latest_seen_at") or "")
         clients[key]["areas"].add(area)
@@ -783,14 +795,15 @@ def build_summary(listings: list[dict]) -> dict:
     for data in clients.values():
         client_rows.append(
             {
-                "contact": data["contact"],
+                "name": data["name"],
+                "phone": data["phone"],
                 "source": data["source"],
                 "count": data["count"],
                 "latest_seen_at": data["latest_seen_at"],
                 "areas": ", ".join(sorted(data["areas"])),
             }
         )
-    client_rows.sort(key=lambda row: (row["contact"] == "Unknown contact", -row["count"], row["contact"]))
+    client_rows.sort(key=lambda row: (row["name"] == "Unknown owner", -row["count"], row["name"], row["phone"]))
 
     return {
         "total": len(listings),
@@ -804,21 +817,21 @@ def build_summary(listings: list[dict]) -> dict:
 
 def render_listing_rows(listings: list[dict]) -> str:
     if not listings:
-        return "<tr><td colspan=\"10\">No listings saved yet.</td></tr>"
+        return "<tr><td colspan=\"9\">No owner listings saved yet.</td></tr>"
     rows = []
     for row in listings:
-        owner_label = "Owner likely" if row.get("is_probable_owner") else "Agency/unknown"
+        owner_name = row.get("seller") or "Unknown owner"
+        phone = row.get("contact") or "Phone hidden"
         rows.append(
             "<tr>"
-            f"<td><a href=\"{html.escape(row.get('url') or '')}\">{html.escape(row.get('title') or '')}</a></td>"
+            f"<td>{html.escape(owner_name)}</td>"
+            f"<td>{html.escape(phone)}</td>"
+            f"<td><a href=\"{html.escape(row.get('url') or '')}\">{html.escape(row.get('title') or 'Open listing')}</a></td>"
             f"<td>{html.escape(row.get('area_name') or '')}</td>"
             f"<td>{html.escape(row.get('source') or '')}</td>"
             f"<td>{html.escape(row.get('raw_price') or '')}</td>"
             f"<td>{fmt_number(row.get('area_sqm'))}</td>"
             f"<td>{fmt_money(row.get('price_per_sqm'))}</td>"
-            f"<td>{html.escape(row.get('seller') or row.get('contact') or '')}</td>"
-            f"<td>{owner_label}</td>"
-            f"<td>{html.escape(row.get('reason') or '')}</td>"
             f"<td>{html.escape((row.get('latest_seen_at') or '')[:19])}</td>"
             "</tr>"
         )
@@ -845,14 +858,15 @@ def render_client_rows(summary: dict) -> str:
     for client in summary["clients"]:
         rows.append(
             "<tr>"
-            f"<td>{html.escape(client['contact'])}</td>"
+            f"<td>{html.escape(client['name'])}</td>"
+            f"<td>{html.escape(client['phone'])}</td>"
             f"<td>{html.escape(client['source'])}</td>"
             f"<td>{client['count']}</td>"
             f"<td>{html.escape(client['areas'])}</td>"
             f"<td>{html.escape(client['latest_seen_at'][:19])}</td>"
             "</tr>"
         )
-    return "\n".join(rows) or "<tr><td colspan=\"5\">No client/contact history yet.</td></tr>"
+    return "\n".join(rows) or "<tr><td colspan=\"6\">No owner contact history yet.</td></tr>"
 
 
 def render_dashboard(title: str, listings: list[dict], summary: dict, root: str = "") -> str:
@@ -892,8 +906,8 @@ def render_dashboard(title: str, listings: list[dict], summary: dict, root: str 
     <h1>{html.escape(title)}</h1>
     <div class="muted">Offline dashboard generated {html.escape(summary["updated_at"][:19])} UTC</div>
     <div class="metrics">
-      <div class="metric">Listings tracked<strong>{summary["total"]}</strong></div>
-      <div class="metric">Likely owners<strong>{summary["owner_count"]}</strong></div>
+      <div class="metric">Owner listings<strong>{summary["total"]}</strong></div>
+      <div class="metric">Owner contacts<strong>{len(summary["clients"])}</strong></div>
       <div class="metric">Average USD/sqm<strong>{fmt_money(summary["avg_price_per_sqm"]) or "N/A"}</strong></div>
       <div class="metric">Areas with folders<strong>{len(summary["areas"])}</strong></div>
     </div>
@@ -914,18 +928,18 @@ def render_dashboard(title: str, listings: list[dict], summary: dict, root: str 
       </table>
     </div>
 
-    <h2>Client / Contact History</h2>
+    <h2>Owner Contact History</h2>
     <div class="table-wrap">
       <table>
-        <thead><tr><th>Client/contact</th><th>Source</th><th>Listings</th><th>Areas</th><th>Latest seen</th></tr></thead>
+        <thead><tr><th>Name</th><th>Phone</th><th>Source</th><th>Listings</th><th>Areas</th><th>Latest seen</th></tr></thead>
         <tbody>{render_client_rows(summary)}</tbody>
       </table>
     </div>
 
-    <h2>Listing History</h2>
+    <h2>Owner Listing History</h2>
     <div class="table-wrap">
       <table>
-        <thead><tr><th>Listing</th><th>Area</th><th>Source</th><th>Price</th><th>sqm</th><th>USD/sqm</th><th>Client/contact</th><th>Status</th><th>Reason</th><th>Latest seen</th></tr></thead>
+        <thead><tr><th>Name</th><th>Phone</th><th>Listing link</th><th>Area</th><th>Source</th><th>Price</th><th>sqm</th><th>USD/sqm</th><th>Latest seen</th></tr></thead>
         <tbody>{render_listing_rows(listings)}</tbody>
       </table>
     </div>
@@ -936,6 +950,7 @@ def render_dashboard(title: str, listings: list[dict], summary: dict, root: str 
 
 
 def generate_dashboard() -> None:
+    purge_non_owner_history()
     dashboard_path = Path(DASHBOARD_DIR)
     data_path = dashboard_path / "data"
     areas_path = dashboard_path / "areas"
@@ -997,7 +1012,6 @@ def run_check(first_run: bool = False) -> None:
         generate_dashboard()
         return
 
-    save_listing_history(candidates)
     new_candidates = [listing for listing in candidates if not already_seen(listing.listing_id)]
     if first_run and not SEND_FIRST_RUN:
         checked = []
