@@ -1,0 +1,106 @@
+DEPLOYMENT GUIDE - LEBANON REAL ESTATE BOT
+==================================================
+
+YOUR CREDENTIALS (SAVE SECURELY):
+- Bot Token: 8750256717:AAF079DJbrHof9VSqSZ5RQx_8-nfTCHGFjU
+- Chat ID: 5586662269
+
+SECURITY WARNING: After deployment, revoke this token via @BotFather
+and get a new one. Never share tokens publicly.
+
+STEP 1: CREATE GITHUB ACCOUNT (3 min)
+----------------------------------------
+1. Go to https://github.com/signup
+2. Enter email, password, username
+3. Verify email
+4. Select 'Free' plan
+5. Click 'Complete setup'
+
+STEP 2: CREATE REPOSITORY (2 min)
+----------------------------------------
+1. Click green 'New' button (top left)
+2. Repository name: lebanon-property-bot
+3. Select 'Private' (important!)
+4. Check 'Add a README file'
+5. Click 'Create repository'
+
+STEP 3: UPLOAD FILES (3 min)
+----------------------------------------
+1. In your repo, click 'Add file' -> 'Upload files'
+2. Drag ALL files from this folder:
+   - bot.py
+   - requirements.txt
+   - Procfile
+   - runtime.txt
+3. Click 'Commit changes'
+
+STEP 4: CREATE RAILWAY ACCOUNT (2 min)
+----------------------------------------
+1. Go to https://railway.app
+2. Click 'Login' -> 'Continue with GitHub'
+3. Authorize Railway
+4. You get $5 free credit monthly
+
+STEP 5: DEPLOY TO RAILWAY (3 min)
+----------------------------------------
+1. In Railway dashboard, click 'New Project'
+2. Select 'Deploy from GitHub repo'
+3. Choose 'lebanon-property-bot'
+4. Railway auto-detects Python
+5. Click 'Deploy'
+
+STEP 6: ADD ENVIRONMENT VARIABLES (2 min)
+----------------------------------------
+1. In Railway, click your project -> 'Variables' tab
+2. Click 'New Variable'
+3. Name: TELEGRAM_BOT_TOKEN
+   Value: 8750256717:AAF079DJbrHof9VSqSZ5RQx_8-nfTCHGFjU
+4. Click 'Add' again
+5. Name: TELEGRAM_CHAT_ID
+   Value: 5586662269
+6. Railway restarts automatically
+
+STEP 7: VERIFY (1 min)
+----------------------------------------
+1. Open Telegram
+2. Message your bot: /start
+3. Check Railway 'Logs' tab
+4. Look for 'LEBANON REAL ESTATE BOT - AGENT MODE'
+
+CRITICAL NEXT STEP: UPDATE HTML SELECTORS
+----------------------------------------
+The bot runs but cannot scrape yet. You must update CSS selectors:
+
+1. Visit https://www.olx.com.lb/properties/
+2. Press F12 (DevTools) -> Elements tab
+3. Find a listing card, note HTML structure
+4. Look for:
+   - Container class (e.g., data-testid='listing-ad')
+   - Title element selector
+   - Price element selector
+   - Location element selector
+   - Link/URL selector
+5. Edit bot.py, find scrape_olx() method
+6. Replace placeholder with real selectors
+7. Commit to GitHub
+8. Railway auto-redeploys
+
+USING YOUR BOT
+----------------------------------------
+Add a client:
+  from bot import LebanonRealEstateBot
+  bot = LebanonRealEstateBot()
+  bot.add_client("Mr. Saad", "+96170123456", 800, 1500,
+                 ["Metn", "Jal El Dib"], generator=True)
+
+Check dashboard:
+  stats = bot.get_dashboard()
+
+Market analysis:
+  analysis = bot.get_market_analysis("Metn", 30)
+
+TROUBLESHOOTING
+----------------------------------------
+Bot not responding? -> Check Railway Logs
+No listings? -> Update HTML selectors first
+Credit running out? -> Use GitHub Actions (free)
